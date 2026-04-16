@@ -6,35 +6,40 @@ import threading
 from fastmcp import FastMCP
 import httpx
 import os
-import json
 from typing import Optional, List
+import xml.etree.ElementTree as ET
 
 mcp = FastMCP("MusicBrainz API Client")
 
 MB_BASE_URL = "https://musicbrainz.org/ws/2"
 CAA_BASE_URL = "https://coverartarchive.org"
-MB_USER_AGENT = os.environ.get("MBUSER", "MusicBrainzMCPClient/1.0")
+USER_AGENT = "MusicBrainz-MCP-Server/1.0.0 ( mcp@example.com )"
 
-DEFAULT_HEADERS = {
-    "User-Agent": MB_USER_AGENT,
-    "Accept": "application/json",
-}
+MBUSER = os.environ.get("MBUSER", "")
+MBPASS = os.environ.get("MBPASS", "")
+
+
+def get_headers(accept_json: bool = True) -> dict:
+    headers = {"User-Agent": USER_AGENT}
+    if accept_json:
+        headers["Accept"] = "application/json"
+    return headers
 
 
 @mcp.tool()
 async def search_musicbrainz(
-    entity: str,
+    entity_type: str,
     query: str,
     limit: int = 25,
     offset: int = 0
 ) -> dict:
-    """Search the MusicBrainz database for entities such as artists, recordings, releases, release-groups, labels, works, or series."""
-    valid_entities = [
-        "artist", "recording", "release", "release-group",
-        "label", "work", "series", "area", "instrument", "event", "url"
+    """Search MusicBrainz for entities like artists, recordings, releases, release-groups, labels, works, series, events, places, instruments, or URLs."""
+    valid_types = [
+        "artist", "recording", "release", "release-group", "label",
+        "work", "series", "event", "place", "instrument", "url"
     ]
-    if entity not in valid_entities:
-        return {"error": f"Invalid entity type '{entity}'. Must be one of: {', '.join(valid_entities)}"}
+    if entity_type not in valid_types:
+        return {"error": f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(valid_types)}"}
 
     limit = max(1, min(100, limit))
     offset = max(0, offset)
@@ -46,230 +51,310 @@ async def search_musicbrainz(
         "fmt": "json"
     }
 
-    url = f"{MB_BASE_URL}/{entity}"
+    url = f"{MB_BASE_URL}/{entity_type}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, params=params, headers=DEFAULT_HEADERS)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params, headers=get_headers())
         if response.status_code != 200:
-            return {"error": f"HTTP {response.status_code}", "detail": response.text}
+            return {"error": f"MusicBrainz API error: HTTP {response.status_code}", "body": response.text}
         return response.json()
 
 
 @mcp.tool()
-async def get_musicbrainz_entity(
-    entity: str,
+async def lookup_entity(
+    entity_type: str,
     mbid: str,
     inc: Optional[List[str]] = None
 ) -> dict:
-    """Retrieve detailed metadata for a specific MusicBrainz entity by its MBID."""
-    valid_entities = [
-        "artist", "recording", "release", "release-group",
-        "label", "work", "series", "area", "instrument", "event", "url", "place"
+    """Look up a specific MusicBrainz entity by its MBID."""
+    valid_types = [
+        "artist", "recording", "release", "release-group", "label",
+        "work", "series", "event", "place", "instrument", "url", "isrc", "iswc"
     ]
-    if entity not in valid_entities:
-        return {"error": f"Invalid entity type '{entity}'. Must be one of: {', '.join(valid_entities)}"}
+    if entity_type not in valid_types:
+        return {"error": f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(valid_types)}"}
 
-    params = {"fmt": "json"}
+    params: dict = {"fmt": "json"}
     if inc:
         params["inc"] = "+".join(inc)
 
-    url = f"{MB_BASE_URL}/{entity}/{mbid}"
+    url = f"{MB_BASE_URL}/{entity_type}/{mbid}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, params=params, headers=DEFAULT_HEADERS)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params, headers=get_headers())
         if response.status_code != 200:
-            return {"error": f"HTTP {response.status_code}", "detail": response.text}
+            return {"error": f"MusicBrainz API error: HTTP {response.status_code}", "body": response.text}
         return response.json()
 
 
 @mcp.tool()
-async def lookup_by_isrc(
-    isrc: str,
-    inc: Optional[List[str]] = None
+async def browse_entities(
+    entity_type: str,
+    linked_entity_type: str,
+    linked_mbid: str,
+    inc: Optional[List[str]] = None,
+    limit: int = 25,
+    offset: int = 0
 ) -> dict:
-    """Look up MusicBrainz recordings associated with a given ISRC (International Standard Recording Code)."""
-    params = {"fmt": "json"}
+    """Browse MusicBrainz entities that are linked to a specific entity."""
+    valid_types = [
+        "artist", "recording", "release", "release-group", "label",
+        "work", "event", "place", "instrument", "series", "url"
+    ]
+    if entity_type not in valid_types:
+        return {"error": f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(valid_types)}"}
+
+    limit = max(1, min(100, limit))
+    offset = max(0, offset)
+
+    params: dict = {
+        linked_entity_type: linked_mbid,
+        "limit": limit,
+        "offset": offset,
+        "fmt": "json"
+    }
     if inc:
         params["inc"] = "+".join(inc)
 
-    url = f"{MB_BASE_URL}/isrc/{isrc}"
+    url = f"{MB_BASE_URL}/{entity_type}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, params=params, headers=DEFAULT_HEADERS)
-        if response.status_code == 404:
-            return {"error": "ISRC not found", "isrc": isrc}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params, headers=get_headers())
         if response.status_code != 200:
-            return {"error": f"HTTP {response.status_code}", "detail": response.text}
+            return {"error": f"MusicBrainz API error: HTTP {response.status_code}", "body": response.text}
         return response.json()
 
 
 @mcp.tool()
 async def get_cover_art(
-    entity: str,
+    entity_type: str,
     mbid: str,
     cover_type: Optional[str] = None
 ) -> dict:
-    """Retrieve cover art information for a MusicBrainz release or release-group from the Cover Art Archive."""
-    if entity not in ("release", "release-group"):
-        return {"error": "entity must be 'release' or 'release-group'"}
-
-    if cover_type and cover_type not in ("front", "back"):
-        return {"error": "cover_type must be 'front' or 'back' if specified"}
+    """Retrieve cover art images for a MusicBrainz release or release-group from the Cover Art Archive."""
+    if entity_type not in ("release", "release-group"):
+        return {"error": "entity_type must be 'release' or 'release-group'"}
 
     if cover_type:
-        url = f"{CAA_BASE_URL}/{entity}/{mbid}/{cover_type}"
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-            response = await client.get(url, headers={"User-Agent": MB_USER_AGENT})
+        if cover_type not in ("front", "back"):
+            return {"error": "cover_type must be 'front' or 'back'"}
+        url = f"{CAA_BASE_URL}/{entity_type}/{mbid}/{cover_type}"
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            response = await client.get(url, headers=get_headers(accept_json=False))
             if response.status_code in (301, 302, 307, 308):
-                redirect_url = response.headers.get("location") or response.headers.get("Location")
-                return {"url": redirect_url, "status": "redirect", "cover_type": cover_type}
+                location = response.headers.get("location")
+                return {"url": location, "status": "redirect", "cover_type": cover_type}
             elif response.status_code == 404:
-                return {"error": f"No {cover_type} cover found for {entity} {mbid}"}
-            elif response.status_code == 200:
-                return {"url": str(response.url), "status": "ok", "cover_type": cover_type}
+                return {"error": "No cover art found for this entity", "mbid": mbid}
+            elif response.status_code == 400:
+                return {"error": "Invalid UUID"}
             else:
-                return {"error": f"HTTP {response.status_code}", "detail": response.text}
+                return {"error": f"Unexpected HTTP status: {response.status_code}"}
     else:
-        url = f"{CAA_BASE_URL}/{entity}/{mbid}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                url,
-                headers={"User-Agent": MB_USER_AGENT, "Accept": "application/json"}
-            )
+        url = f"{CAA_BASE_URL}/{entity_type}/{mbid}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=get_headers())
             if response.status_code == 404:
-                return {"error": f"No cover art found for {entity} {mbid}"}
-            if response.status_code != 200:
-                return {"error": f"HTTP {response.status_code}", "detail": response.text}
+                return {"error": "No cover art found for this entity", "mbid": mbid}
+            elif response.status_code == 400:
+                return {"error": "Invalid UUID"}
+            elif response.status_code != 200:
+                return {"error": f"Cover Art Archive error: HTTP {response.status_code}", "body": response.text}
             return response.json()
 
 
 @mcp.tool()
 async def submit_isrc(
     recording_mbid: str,
-    isrcs: List[str]
+    isrc: str
 ) -> dict:
-    """Submit one or more ISRC codes linked to MusicBrainz recording MBIDs. Requires authentication."""
-    mb_username = os.environ.get("MB_USERNAME")
-    mb_password = os.environ.get("MB_PASSWORD")
-
-    if not mb_username or not mb_password:
-        return {
-            "error": "Authentication required. Set MB_USERNAME and MB_PASSWORD environment variables."
-        }
-
-    if not isrcs:
-        return {"error": "No ISRCs provided"}
+    """Submit an ISRC code to link to a recording in MusicBrainz. Requires authentication."""
+    if not MBUSER or not MBPASS:
+        return {"error": "Authentication required. Set MBUSER and MBPASS environment variables."}
 
     # Build XML payload for ISRC submission
-    isrc_xml_parts = "".join(
-        f'<isrc id="{isrc}"/>'
-        for isrc in isrcs
-    )
-    xml_body = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        '<metadata xmlns="http://musicbrainz.org/ns/mmd-2.0#">'
-        '<recording-list>'
-        f'<recording id="{recording_mbid}">'
-        f'<isrc-list count="{len(isrcs)}">'
-        f'{isrc_xml_parts}'
-        '</isrc-list>'
-        '</recording>'
-        '</recording-list>'
-        '</metadata>'
-    )
+    xml_body = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<metadata xmlns=\"http://musicbrainz.org/ns/mmd-2.0#\">
+  <recording-list>
+    <recording id=\"{recording_mbid}\">
+      <isrc-list count=\"1\">
+        <isrc id=\"{isrc}\"/>
+      </isrc-list>
+    </recording>
+  </recording-list>
+</metadata>"""
 
-    url = f"{MB_BASE_URL}/recording/"
+    url = f"{MB_BASE_URL}/recording/{recording_mbid}/isrcs"
+    # Use POST to /ws/2/recording with ISRC submission
+    submit_url = f"{MB_BASE_URL}/isrc/{isrc}"
+
+    # The correct endpoint for submitting ISRCs is POST /ws/2/recording
+    post_url = f"{MB_BASE_URL}/recording"
+
     headers = {
-        "User-Agent": MB_USER_AGENT,
+        "User-Agent": USER_AGENT,
         "Content-Type": "application/xml; charset=UTF-8",
+        "Accept": "application/json"
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # First request to get digest auth challenge
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            post_url,
+            content=xml_body.encode("utf-8"),
+            headers=headers,
+            auth=(MBUSER, MBPASS)
+        )
+        if response.status_code in (200, 201):
+            return {"success": True, "message": f"ISRC {isrc} submitted for recording {recording_mbid}"}
+        elif response.status_code == 401:
+            return {"error": "Authentication failed. Check MBUSER and MBPASS."}
+        elif response.status_code == 403:
+            return {"error": "Forbidden. You may not have permission to submit this data."}
+        else:
+            return {"error": f"MusicBrainz API error: HTTP {response.status_code}", "body": response.text}
+
+
+@mcp.tool()
+async def submit_tags(
+    entity_type: str,
+    mbid: str,
+    tags: List[str]
+) -> dict:
+    """Submit user tags for MusicBrainz entities. Requires authentication."""
+    if not MBUSER or not MBPASS:
+        return {"error": "Authentication required. Set MBUSER and MBPASS environment variables."}
+
+    valid_types = ["artist", "recording", "release", "release-group", "label", "work", "event"]
+    if entity_type not in valid_types:
+        return {"error": f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(valid_types)}"}
+
+    if not tags:
+        return {"error": "At least one tag must be provided."}
+
+    # Build tag list XML
+    tag_elements = "".join(f'<tag name="{t}"/>' for t in tags)
+    plural = entity_type + "s" if not entity_type.endswith("s") else entity_type
+    # Properly pluralize for release-group
+    if entity_type == "release-group":
+        plural = "release-group-list"
+        entity_list_open = f'<release-group-list>'
+        entity_list_close = f'</release-group-list>'
+        entity_elem = f'<release-group id="{mbid}"><user-tag-list>{tag_elements}</user-tag-list></release-group>'
+    else:
+        entity_list_open = f'<{entity_type}-list>'
+        entity_list_close = f'</{entity_type}-list>'
+        entity_elem = f'<{entity_type} id="{mbid}"><user-tag-list>{tag_elements}</user-tag-list></{entity_type}>'
+
+    xml_body = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<metadata xmlns=\"http://musicbrainz.org/ns/mmd-2.0#\">
+  {entity_list_open}
+    {entity_elem}
+  {entity_list_close}
+</metadata>"""
+
+    url = f"{MB_BASE_URL}/tag"
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/xml; charset=UTF-8",
+        "Accept": "application/json"
+    }
+
+    async with httpx.AsyncClient() as client:
         response = await client.post(
             url,
             content=xml_body.encode("utf-8"),
             headers=headers,
-            params={"client": MB_USER_AGENT},
-            auth=httpx.DigestAuth(mb_username, mb_password)
+            auth=(MBUSER, MBPASS)
         )
         if response.status_code in (200, 201):
-            return {"success": True, "message": "ISRCs submitted successfully", "recording_mbid": recording_mbid, "isrcs": isrcs}
+            return {"success": True, "message": f"Tags {tags} submitted for {entity_type} {mbid}"}
+        elif response.status_code == 401:
+            return {"error": "Authentication failed. Check MBUSER and MBPASS."}
+        elif response.status_code == 403:
+            return {"error": "Forbidden. You may not have permission to submit tags."}
         else:
-            return {"error": f"HTTP {response.status_code}", "detail": response.text}
+            return {"error": f"MusicBrainz API error: HTTP {response.status_code}", "body": response.text}
 
 
 @mcp.tool()
-async def lookup_by_iswc(
-    iswc: str,
+async def submit_rating(
+    entity_type: str,
+    mbid: str,
+    rating: int
+) -> dict:
+    """Submit a user rating (1-5) for a MusicBrainz entity. Requires authentication."""
+    if not MBUSER or not MBPASS:
+        return {"error": "Authentication required. Set MBUSER and MBPASS environment variables."}
+
+    valid_types = ["artist", "recording", "release", "release-group", "label", "work"]
+    if entity_type not in valid_types:
+        return {"error": f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(valid_types)}"}
+
+    if not (1 <= rating <= 5):
+        return {"error": "Rating must be between 1 and 5 inclusive."}
+
+    # Convert 1-5 scale to 1-100 scale for MusicBrainz API
+    mb_rating = rating * 20
+
+    if entity_type == "release-group":
+        entity_list_open = "<release-group-list>"
+        entity_list_close = "</release-group-list>"
+        entity_elem = f'<release-group id="{mbid}"><user-rating>{mb_rating}</user-rating></release-group>'
+    else:
+        entity_list_open = f"<{entity_type}-list>"
+        entity_list_close = f"</{entity_type}-list>"
+        entity_elem = f'<{entity_type} id="{mbid}"><user-rating>{mb_rating}</user-rating></{entity_type}>'
+
+    xml_body = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<metadata xmlns=\"http://musicbrainz.org/ns/mmd-2.0#\">
+  {entity_list_open}
+    {entity_elem}
+  {entity_list_close}
+</metadata>"""
+
+    url = f"{MB_BASE_URL}/rating"
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/xml; charset=UTF-8",
+        "Accept": "application/json"
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            url,
+            content=xml_body.encode("utf-8"),
+            headers=headers,
+            auth=(MBUSER, MBPASS)
+        )
+        if response.status_code in (200, 201):
+            return {"success": True, "message": f"Rating {rating}/5 submitted for {entity_type} {mbid}"}
+        elif response.status_code == 401:
+            return {"error": "Authentication failed. Check MBUSER and MBPASS."}
+        elif response.status_code == 403:
+            return {"error": "Forbidden. You may not have permission to submit ratings."}
+        else:
+            return {"error": f"MusicBrainz API error: HTTP {response.status_code}", "body": response.text}
+
+
+@mcp.tool()
+async def lookup_isrc(
+    isrc: str,
     inc: Optional[List[str]] = None
 ) -> dict:
-    """Look up MusicBrainz works associated with a given ISWC (International Standard Musical Work Code)."""
-    params = {"fmt": "json"}
+    """Look up MusicBrainz recordings associated with a given ISRC code."""
+    params: dict = {"fmt": "json"}
     if inc:
         params["inc"] = "+".join(inc)
 
-    url = f"{MB_BASE_URL}/iswc/{iswc}"
+    url = f"{MB_BASE_URL}/isrc/{isrc}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, params=params, headers=DEFAULT_HEADERS)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params, headers=get_headers())
         if response.status_code == 404:
-            return {"error": "ISWC not found", "iswc": iswc}
-        if response.status_code != 200:
-            return {"error": f"HTTP {response.status_code}", "detail": response.text}
+            return {"error": f"No recordings found for ISRC '{isrc}'", "isrc": isrc}
+        elif response.status_code != 200:
+            return {"error": f"MusicBrainz API error: HTTP {response.status_code}", "body": response.text}
         return response.json()
-
-
-@mcp.tool()
-async def post_musicbrainz_edit(
-    entity: str,
-    mbid: str,
-    edit_data: str,
-    edit_note: Optional[str] = None
-) -> dict:
-    """Submit an authenticated edit to the MusicBrainz database. Requires authentication."""
-    mb_username = os.environ.get("MB_USERNAME")
-    mb_password = os.environ.get("MB_PASSWORD")
-
-    if not mb_username or not mb_password:
-        return {
-            "error": "Authentication required. Set MB_USERNAME and MB_PASSWORD environment variables."
-        }
-
-    valid_entities = ["recording", "release", "artist", "label", "release-group", "work"]
-    if entity not in valid_entities:
-        return {"error": f"Invalid entity type '{entity}'. Must be one of: {', '.join(valid_entities)}"}
-
-    try:
-        data = json.loads(edit_data)
-    except json.JSONDecodeError as e:
-        return {"error": f"Invalid JSON in edit_data: {str(e)}"}
-
-    if edit_note:
-        data["edit_note"] = edit_note
-
-    url = f"{MB_BASE_URL}/{entity}/{mbid}"
-    headers = {
-        "User-Agent": MB_USER_AGENT,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            url,
-            json=data,
-            headers=headers,
-            params={"fmt": "json", "client": MB_USER_AGENT},
-            auth=httpx.DigestAuth(mb_username, mb_password)
-        )
-        if response.status_code in (200, 201):
-            try:
-                return {"success": True, "response": response.json()}
-            except Exception:
-                return {"success": True, "message": "Edit submitted successfully"}
-        else:
-            return {"error": f"HTTP {response.status_code}", "detail": response.text}
 
 
 
