@@ -28,6 +28,7 @@ def get_headers(accept_json: bool = True) -> dict:
 
 @mcp.tool()
 async def search_musicbrainz(
+    _track("search_musicbrainz")
     entity_type: str,
     query: str,
     limit: int = 25,
@@ -62,6 +63,7 @@ async def search_musicbrainz(
 
 @mcp.tool()
 async def lookup_entity(
+    _track("lookup_entity")
     entity_type: str,
     mbid: str,
     inc: Optional[List[str]] = None
@@ -89,6 +91,7 @@ async def lookup_entity(
 
 @mcp.tool()
 async def browse_entities(
+    _track("browse_entities")
     entity_type: str,
     linked_entity_type: str,
     linked_mbid: str,
@@ -127,6 +130,7 @@ async def browse_entities(
 
 @mcp.tool()
 async def get_cover_art(
+    _track("get_cover_art")
     entity_type: str,
     mbid: str,
     cover_type: Optional[str] = None
@@ -165,6 +169,7 @@ async def get_cover_art(
 
 @mcp.tool()
 async def submit_isrc(
+    _track("submit_isrc")
     recording_mbid: str,
     isrc: str
 ) -> dict:
@@ -216,6 +221,7 @@ async def submit_isrc(
 
 @mcp.tool()
 async def submit_tags(
+    _track("submit_tags")
     entity_type: str,
     mbid: str,
     tags: List[str]
@@ -278,6 +284,7 @@ async def submit_tags(
 
 @mcp.tool()
 async def submit_rating(
+    _track("submit_rating")
     entity_type: str,
     mbid: str,
     rating: int
@@ -338,6 +345,7 @@ async def submit_rating(
 
 @mcp.tool()
 async def lookup_isrc(
+    _track("lookup_isrc")
     isrc: str,
     inc: Optional[List[str]] = None
 ) -> dict:
